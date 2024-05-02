@@ -1,4 +1,6 @@
 
+type MyUser = GoogleAppsScript.AdminDirectory.Schema.User & { recoveryEmail: string };
+
 const users = listAllUsers()
 
 const sessionId = conscriboLogin();
@@ -6,19 +8,29 @@ const sessionId = conscriboLogin();
 function createUsers() {
   const people = getPeople();
   for (const person of people) {
-    let user = createNewUser(person.voornaam, person.achternaam, person.email, person.code);
-    if (user) {
-      try {
-        AdminDirectory.Users.insert(user);
-        console.log(`User ${person.voornaam} ${person.achternaam} created in G Suite`);
-      } catch (e) {
-        console.error(`Error creating user ${person.voornaam} ${person.achternaam}: ${e}`);
-      }
+    const existingUser = findUser(person.code);
+    if (existingUser) {
+      console.log(`User ${existingUser.name.fullName} already exists in G Suite with code ${person.code}`);
+      updateUser(existingUser, person);
     } else {
-      console.log(`User ${person.voornaam} ${person.achternaam} already exists in G Suite`);
+      let user = createNewUser(person.voornaam, person.achternaam, person.email, person.code);
+      if (user) {
+        try {
+          AdminDirectory.Users.insert(user);
+          console.log(`User ${person.voornaam} ${person.achternaam} created in G Suite`);
+        } catch (e) {
+          console.error(`Error creating user ${person.voornaam} ${person.achternaam}: ${e}`);
+        }
+      } else {
+        console.log(`User ${person.voornaam} ${person.achternaam} already exists in G Suite`);
+      }
     }
 
   }
+}
+
+function findUser(code: string): MyUser | undefined {
+  return users.find(user => user.externalIds && user.externalIds.find((id: GoogleAppsScript.AdminDirectory.Schema.UserExternalId) => id.customType === "conscriboID" && id.value === code));
 }
 
 function conscriboLogin(): string {
@@ -47,9 +59,15 @@ function conscriboLogin(): string {
 }
 
 function listUsers() {
-  for (const user of users) {
-    console.log(JSON.stringify(user))
-  }
+  // for (const user of users.filter(user => user.externalIds == null)) {
+  //   console.log(user.name.fullName);
+  // }
+  let people = getPeople();
+  let me = people.find(person => person.code === "1016");
+  console.log(JSON.stringify(me));
+  let u2 = users.find(user => user.primaryEmail === "juliusdejeu@aegee-delft.nl");
+  console.log(JSON.stringify(u2));
+  updateUser(u2, me);
 }
 
 function listFieldDefinitions() {
@@ -134,7 +152,7 @@ function makeConscriboRequest(command: string, data: any) {
   }
 }
 
-function listAllUsers(): GoogleAppsScript.AdminDirectory.Schema.User[] {
+function listAllUsers(): MyUser[] {
   let pageToken: any;
   let page: GoogleAppsScript.AdminDirectory.Schema.Users;
   let allUsers = [];
@@ -159,10 +177,6 @@ function listAllUsers(): GoogleAppsScript.AdminDirectory.Schema.User[] {
 }
 
 function createNewUser(firstName: string, lastName: string, backupEmail: string, id: string): GoogleAppsScript.AdminDirectory.Schema.User | undefined {
-  if (users.find(user => user.name.givenName === firstName && user.name.familyName === lastName)) {
-    console.log(`User ${firstName} ${lastName} already exists in G Suite`);
-    return;
-  }
   let primaryEmail = `${firstName.replace(/\s/g, "")}${lastName.replace(/\s/g, "")}@aegee-delft.nl`.toLocaleLowerCase("nl-NL");
   console.log(`Creating user ${firstName} ${lastName} with email ${primaryEmail}`);
   let user = {
@@ -182,4 +196,39 @@ function createNewUser(firstName: string, lastName: string, backupEmail: string,
     orgUnitPath: "/Member",
   }
   return user;
+}
+
+function userConscriboId(user: GoogleAppsScript.AdminDirectory.Schema.User): string | undefined {
+  let externalIds: GoogleAppsScript.AdminDirectory.Schema.UserExternalId[] = user.externalIds;
+  if (externalIds) {
+    let id = externalIds.find((id: GoogleAppsScript.AdminDirectory.Schema.UserExternalId) => id.customType === "conscriboID");
+    if (id) {
+      return id.value;
+    }
+  }
+}
+
+function updateUser(user: MyUser, cUser: Person) {
+  let reMail = user.recoveryEmail ?? "";
+  if (cUser.email === reMail && userConscriboId(user) === cUser.code) {
+    console.log(`User ${user.name.fullName} already has the correct email address and conscribo ID`);
+    return;
+  }
+  try {
+    let u2 = {
+      name: {
+        givenName: cUser.voornaam,
+        familyName: cUser.achternaam,
+      },
+      recoveryEmail: cUser.email,
+      externalIds: [{
+        type: "custom",
+        customType: "conscriboID",
+        value: cUser.code
+      }],
+    }
+    AdminDirectory.Users.update(u2, user.primaryEmail)
+  } catch (e) {
+    console.error(`Error updating user ${user.name.fullName}: ${e}`);
+  }
 }
